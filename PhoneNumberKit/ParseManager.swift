@@ -85,33 +85,26 @@ class ParseManager {
     - Returns: An array of valid PhoneNumber objects.
     */
     func parseMultiple(rawNumbers: [String], region: String, testCallback: (()->())? = nil) -> [PhoneNumber] {
-        let rawNumbersCopy = rawNumbers
-        self.multiParseArray = SynchronizedArray<PhoneNumber>()
-        let queue = NSOperationQueue()
-        var operationArray: [ParseOperation<PhoneNumber>] = []
-        let completionOperation = ParseOperation<Bool>()
-        completionOperation.onStart { asyncOp in
-            asyncOp.finish(with: true)
-        }
-        completionOperation.whenFinished { asyncOp in
-        }
-        for (index, rawNumber) in rawNumbersCopy.enumerate() {
-            let parseTask = parseOperation(rawNumber, region:region)
-            parseTask.whenFinished { operation in
-                if let phoneNumber = operation.output.value {
-                    self.multiParseArray.append(phoneNumber)
-                }
-            }
-            operationArray.append(parseTask)
-            completionOperation.addDependency(parseTask)
+        var multiParseArray = [PhoneNumber]()
+        let group = DispatchGroup()
+        let queue = DispatchQueue(label: "com.phonenumberkit.multipleparse")
+        for (index, numberString) in rawNumbers.enumerate() {
+            group.enter()
+            queue.async(group, execute: {
+                [weak self] in
+                do {
+                    if let phoneNumebr = try self?.parsePhoneNumber(numberString, region: region) {
+                        multiParseArray.append(phoneNumebr)
+                    }
+                } catch {}
+                group.leave()
+                })
             if index == rawNumbers.count/2 {
                 testCallback?()
             }
         }
-        queue.addOperations(operationArray, waitUntilFinished: false)
-        queue.addOperations([completionOperation], waitUntilFinished: true)
-        let localMultiParseArray = self.multiParseArray
-        return localMultiParseArray.array
+        group.wait()
+        return multiParseArray
     }
     
     /**
@@ -141,4 +134,45 @@ class SynchronizedArray<T> {
             self.array.append(newElement)
         }
     }
+}
+
+class DispatchGroup {
+    
+    let group: dispatch_group_t
+    
+    init() {
+        group = dispatch_group_create()
+    }
+    
+    func enter() {
+        dispatch_group_enter(group)
+    }
+    
+    func leave() {
+        dispatch_group_leave(group)
+    }
+    
+    func wait() {
+        dispatch_group_wait(group, DISPATCH_TIME_FOREVER)
+    }
+    
+}
+
+typealias DispatchWorkItem = () -> Void
+
+class DispatchQueue {
+    
+    let queue: dispatch_queue_t
+    
+    init(label label: String) {
+        queue = dispatch_queue_create(label, nil)
+    }
+    
+    func async(group: DispatchGroup, execute: DispatchWorkItem) {
+        dispatch_group_async(group.group, queue) {
+            [weak self] in
+            execute()
+        }
+    }
+    
 }
